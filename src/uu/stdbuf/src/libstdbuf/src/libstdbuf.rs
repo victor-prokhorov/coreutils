@@ -4,19 +4,19 @@
 // file that was distributed with this source code.
 // spell-checker:ignore (ToDO) getreent reent IOFBF IOLBF IONBF setvbuf stderrp stdinp stdoutp fdopen
 
-#![feature(stdout_switchable_buffering)]
+#![feature(stdio_switchable_buffering)]
 
 use ctor::ctor;
 use libc::{_IOFBF, _IOLBF, _IONBF, FILE, c_char, c_int, fileno, size_t};
 use std::env;
-use std::io::{self, BufferMode};
+use std::io::{self, BufferingMode};
 use std::ptr;
 
-fn value_to_buffer_mode(value: &str) -> BufferMode {
+fn value_to_buffering_mode(value: &str) -> BufferingMode {
     match value {
-        "0" => BufferMode::Immediate,
-        "L" => BufferMode::Line,
-        _ => BufferMode::Block,
+        "0" => BufferingMode::Unbuffered,
+        "L" => BufferingMode::LineBuffered,
+        _ => BufferingMode::Buffered,
     }
 }
 
@@ -246,16 +246,23 @@ fn set_buffer(stream: *mut FILE, value: &str) {
 /// The caller must ensure this function is only called in a compatible runtime environment.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __stdbuf() {
-    if let Ok(val) = env::var("_STDBUF_E") {
-        set_buffer(unsafe { __stdbuf_get_stderr() }, &val);
-    }
+    use std::io::{BufferedRead, BufferedWrite};
     if let Ok(val) = env::var("_STDBUF_I") {
+        io::stdin()
+            .lock()
+            .set_buffering_mode(value_to_buffering_mode(&val));
         set_buffer(unsafe { __stdbuf_get_stdin() }, &val);
     }
     if let Ok(val) = env::var("_STDBUF_O") {
         io::stdout()
             .lock()
-            .set_buffer_mode(value_to_buffer_mode(&val));
+            .set_buffering_mode(value_to_buffering_mode(&val));
         set_buffer(unsafe { __stdbuf_get_stdout() }, &val);
+    }
+    if let Ok(val) = env::var("_STDBUF_E") {
+        io::stderr()
+            .lock()
+            .set_buffering_mode(value_to_buffering_mode(&val));
+        set_buffer(unsafe { __stdbuf_get_stderr() }, &val);
     }
 }

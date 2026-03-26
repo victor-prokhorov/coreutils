@@ -24,24 +24,28 @@ rustup run stage1 rustc --version | grep -q 'rustc' \
 ok "$(rustup run stage1 rustc --version)"
 rustup run stage1 rustc --edition 2021 -C prefer-dynamic \
   -o /tmp/poc_api_check - <<'RUST' \
-  || fail "stdout_switchable_buffering or set_buffer_mode not found in stage1 stdlib"
-#![feature(stdout_switchable_buffering)]
-use std::io::{self, BufferMode};
-fn main() { io::stdout().lock().set_buffer_mode(BufferMode::Line); }
+  || fail "stdio_switchable_buffering or set_buffering_mode not found in stage1 stdlib"
+#![feature(stdio_switchable_buffering)]
+use std::io::{self, BufferingMode, BufferedWrite, BufferedRead};
+fn main() {
+    io::stdout().lock().set_buffering_mode(BufferingMode::LineBuffered);
+    io::stderr().lock().set_buffering_mode(BufferingMode::Unbuffered);
+    io::stdin().lock().set_buffering_mode(BufferingMode::Buffered);
+}
 RUST
-ok "stage1 stdlib has stdout_switchable_buffering and set_buffer_mode"
+ok "stage1 stdlib has stdio_switchable_buffering and set_buffering_mode for all 3 streams"
 
 step "cargo +stage1 build"
 cd "$COREUTILS_DIR"
-RUSTC="$STAGE1_RUSTC" cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq
+CARGO_TARGET_DIR=target/stage1 RUSTC="$STAGE1_RUSTC" cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq
 
 step "block buffering test all lines must appear together at the end"
 rustup run stage1 rustc --edition 2021 -C prefer-dynamic \
   -o /tmp/poc_block_test - <<'RUST' || fail "compile poc_block_test"
-#![feature(stdout_switchable_buffering)]
-use std::io::{self, BufferMode};
+#![feature(stdio_switchable_buffering)]
+use std::io::{self, BufferingMode, BufferedWrite};
 fn main() {
-    io::stdout().lock().set_buffer_mode(BufferMode::Block);
+    io::stdout().lock().set_buffering_mode(BufferingMode::Buffered);
     for line in ["1", "2", "3", "soleil"] {
         println!("{line}");
         std::thread::sleep(std::time::Duration::from_secs(1));
