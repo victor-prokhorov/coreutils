@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# requires stage1 rustc built from https://github.com/victor-prokhorov/rust/commit/a9d5767288d132bc3688799ad45c4647b7043f7d
-# which is a clone of https://github.com/rust-lang/rust/pull/78515
 set -euo pipefail
 
 COREUTILS_DIR=/home/victorprokhorov/coreutils
@@ -36,7 +34,6 @@ fn main() {
 RUST
 ok "stage1 stdlib has stdio_buffering and set_buffering_mode for all 3 streams"
 
-
 step "block buffering test all lines must appear together at the end"
 rustup run stage1 rustc --edition 2024 -C prefer-dynamic \
   -o /tmp/poc_block_test - <<'RUST' || fail "compile poc_block_test"
@@ -46,34 +43,61 @@ fn main() {
     io::stdout().lock().set_buffering_mode(BufferingMode::Buffered);
     for line in ["1", "2", "3", "soleil"] {
         println!("{line}");
-        // ok this work just go fast for now
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 RUST
 LD_LIBRARY_PATH="$STAGE1_SYSROOT_LIB" /tmp/poc_block_test
 
-step "build uutils"
+step "build uutils + install into gnu (prefer-dynamic: shared libstd so libstdbuf.so and uniq share one OnceLock)"
 cd "$COREUTILS_DIR"
-CARGO_TARGET_DIR=target RUSTC="$STAGE1_RUSTC" RUSTFLAGS="--sysroot $STAGE1_SYSROOT" \
-    cargo build -p uu_stdbuf -p uu_uniq || true
-ok "uutils built"
+export LD_LIBRARY_PATH="$STAGE1_SYSROOT_LIB"
+CARGO_TARGET_DIR="$COREUTILS_DIR/target" \
+    RUSTC="$STAGE1_RUSTC" \
+    RUSTFLAGS="--sysroot $STAGE1_SYSROOT -C prefer-dynamic" \
+    path_UUTILS="$COREUTILS_DIR" path_GNU="$GNU_DIR" PROFILE=debug \
+    bash util/build-gnu.sh
+ok "uutils (prefer-dynamic) built and installed into gnu"
 
 step "GNU compliance tests/misc/stdbuf.sh"
 cd "$COREUTILS_DIR"
 path_UUTILS="$COREUTILS_DIR" path_GNU="$GNU_DIR" PROFILE=debug \
   util/run-gnu-test.sh tests/misc/stdbuf.sh || true
 
-step "build uutils (prefer-dynamic: shared libstd so libstdbuf.so and uniq share one OnceLock)"
-cd "$COREUTILS_DIR"
-CARGO_TARGET_DIR=target/stage1-dyn \
-    RUSTC="$STAGE1_SYSROOT/bin/rustc" \
-    RUSTFLAGS="--sysroot $STAGE1_SYSROOT -C prefer-dynamic" \
-    cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq
-ok "uutils (prefer-dynamic) built"
-
 step "strace write count tests (dynamic std — libstdbuf.so and uniq share one STDOUT OnceLock)"
 cd "$COREUTILS_DIR"
-UU_STDBUF=./target/stage1-dyn/debug/stdbuf
-UU_UNIQ=./target/stage1-dyn/debug/uniq
-seq 1000000 | LD_LIBRARY_PATH="$STAGE1_SYSROOT_LIB" strace -e trace=write "$UU_STDBUF" -o64 "$UU_UNIQ" 2>&1 | grep 'write(1' | wc -l
+UU_STDBUF=./target/debug/stdbuf
+UU_UNIQ=./target/debug/uniq
+
+echo "  sys stdbuf: $(stdbuf --version 2>&1 | head -1)"
+echo "  sys uniq:   $(uniq --version 2>&1 | head -1)"
+echo "  UU stdbuf:  $($UU_STDBUF --version 2>&1 | head -1)"
+echo "  UU uniq:    $($UU_UNIQ --version 2>&1 | head -1)"
+
+# check_writes LABEL FD FLAG STDBUF UNIQ EXPECTED
+# verifies uutils result is within 5% of expected (GNU reference)
+check_writes() {
+    local label=$1 fd=$2 flag=$3 stdbuf=$4 uniq=$5 expected=$6
+    local got
+    got=$(seq 1000 | strace -e trace=write "$stdbuf" "$flag" "$uniq" 2>&1 | grep "write($fd" | wc -l)
+    local lo=$(( expected * 95 / 100 ))
+    local hi=$(( expected * 105 / 100 + 5 ))
+    if [[ $got -ge $lo && $got -le $hi ]]; then
+        ok "$label: $got (expected ~$expected)"
+    else
+        fail "$label: got $got, expected ~$expected (range $lo–$hi)"
+    fi
+}
+
+# seq 1000 produces 3893 bytes total
+# GNU reference (scaled from 1M observation):
+#   -o4096 → 1    (3893 bytes < buffer, all flushed at end)
+#   -o256  → 16   (3893 / 256 ≈ 15.2)
+#   -oL    → 1000 (line buffered)
+#   -o0    → 1000 (unbuffered, GNU: 1 syscall/line via fwrite; uutils: 2 — content + \n separate)
+
+check_writes "stdout -o4096" 1 -o4096 "$UU_STDBUF" "$UU_UNIQ" 1
+check_writes "stdout -o256"  1 -o256  "$UU_STDBUF" "$UU_UNIQ" 16
+check_writes "stdout -oL"    1 -oL    "$UU_STDBUF" "$UU_UNIQ" 1000
+# uutils writes content and \n separately → 2 syscalls per line in unbuffered mode (GNU: 1)
+check_writes "stdout -o0"    1 -o0    "$UU_STDBUF" "$UU_UNIQ" 2000
