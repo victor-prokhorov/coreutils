@@ -107,5 +107,15 @@ check how Zig does that!
 
 
 
-alias rebuild-uutils='cd /home/victorprokhorov/coreutils && STAGE1_SYSROOT=$(rustup run stage1 rustc --print sysroot) && CARGO_TARGET_DIR=target/stage1 RUSTC="$STAGE1_SYSROOT/bin/rustc" RUSTFLAGS="--sysroot $STAGE1_SYSROOT" cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq'
+alias rebuild-uutils='cd /home/victorprokhorov/coreutils && STAGE1_SYSROOT=$(rustup run stage1 rustc --print sysroot) && CARGO_TARGET_DIR=target RUSTC="$STAGE1_SYSROOT/bin/rustc" RUSTFLAGS="--sysroot $STAGE1_SYSROOT" cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq'
+return self to build?
 
+
+tradeoff of seeting buffer to 0?
+set to line buffered and 0?
+
+euh building the whole thing in prefer-dynamic then??? is this even acceptable? i think this is
+needed
+
+unbuffred uutils chck that one as well
+line buffering for the input
