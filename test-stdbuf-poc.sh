@@ -11,6 +11,8 @@ STAGE1_RUSTC="$STAGE1_SYSROOT/bin/rustc"
 ok()   { echo "  OK  $*"; }
 fail() { echo "FAIL $*"; exit 1; }
 step() { echo; echo "$*"; }
+FAILURES=0
+check_fail() { echo "FAIL $*"; FAILURES=$(( FAILURES + 1 )); }
 
 step "build stdlib"
 cd "$RUST_DIR"
@@ -21,7 +23,7 @@ step "toolchain check"
 rustup run stage1 rustc --version | grep -q 'rustc' \
   || fail "stage1 toolchain not found"
 ok "$(rustup run stage1 rustc --version)"
-rustup run stage1 rustc --edition 2024 -C prefer-dynamic \
+rustup run stage1 rustc --edition 2024 \
   -o /tmp/poc_api_check - <<'RUST' \
   || fail "stdio_buffering or set_buffering_mode not found in stage1 stdlib"
 #![feature(stdio_buffering)]
@@ -54,10 +56,18 @@ cd "$COREUTILS_DIR"
 export LD_LIBRARY_PATH="$STAGE1_SYSROOT_LIB"
 CARGO_TARGET_DIR="$COREUTILS_DIR/target" \
     RUSTC="$STAGE1_RUSTC" \
-    RUSTFLAGS="--sysroot $STAGE1_SYSROOT -C prefer-dynamic" \
+    RUSTFLAGS="--sysroot $STAGE1_SYSROOT -C link-arg=-Wl,-rpath,$STAGE1_SYSROOT_LIB" \
     path_UUTILS="$COREUTILS_DIR" path_GNU="$GNU_DIR" PROFILE=debug \
     bash util/build-gnu.sh
 ok "uutils (prefer-dynamic) built and installed into gnu"
+
+step "build individual binaries with rpath (for direct use without LD_LIBRARY_PATH)"
+cd "$COREUTILS_DIR"
+CARGO_TARGET_DIR="$COREUTILS_DIR/target" \
+    RUSTC="$STAGE1_RUSTC" \
+    RUSTFLAGS="--sysroot $STAGE1_SYSROOT -C link-arg=-Wl,-rpath,$STAGE1_SYSROOT_LIB" \
+    cargo build -p uu_stdbuf_libstdbuf -p uu_stdbuf -p uu_uniq
+ok "individual binaries built with rpath"
 
 step "GNU compliance tests/misc/stdbuf.sh"
 cd "$COREUTILS_DIR"
@@ -85,7 +95,7 @@ check_writes() {
     if [[ $got -ge $lo && $got -le $hi ]]; then
         ok "$label: $got (expected ~$expected)"
     else
-        fail "$label: got $got, expected ~$expected (range $lo–$hi)"
+        check_fail "$label: got $got, expected ~$expected (range $lo–$hi)"
     fi
 }
 
@@ -96,8 +106,21 @@ check_writes() {
 #   -oL    → 1000 (line buffered)
 #   -o0    → 1000 (unbuffered, GNU: 1 syscall/line via fwrite; uutils: 2 — content + \n separate)
 
-check_writes "stdout -o4096" 1 -o4096 "$UU_STDBUF" "$UU_UNIQ" 1
-check_writes "stdout -o256"  1 -o256  "$UU_STDBUF" "$UU_UNIQ" 16
-check_writes "stdout -oL"    1 -oL    "$UU_STDBUF" "$UU_UNIQ" 1000
+check_writes "individual -o4096" 1 -o4096 "$UU_STDBUF" "$UU_UNIQ" 1
+check_writes "individual -o256"  1 -o256  "$UU_STDBUF" "$UU_UNIQ" 16
+check_writes "individual -oL"    1 -oL    "$UU_STDBUF" "$UU_UNIQ" 1000
 # uutils writes content and \n separately → 2 syscalls per line in unbuffered mode (GNU: 1)
-check_writes "stdout -o0"    1 -o0    "$UU_STDBUF" "$UU_UNIQ" 2000
+check_writes "individual -o0"    1 -o0    "$UU_STDBUF" "$UU_UNIQ" 2000
+
+step "strace write count tests (multicall binary)"
+MULTI_DIR=$(mktemp -d)
+ln -s "$(realpath ./target/debug/coreutils)" "$MULTI_DIR/stdbuf"
+ln -s "$(realpath ./target/debug/coreutils)" "$MULTI_DIR/uniq"
+check_writes "multicall -o4096" 1 -o4096 "$MULTI_DIR/stdbuf" "$MULTI_DIR/uniq" 1
+check_writes "multicall -o256"  1 -o256  "$MULTI_DIR/stdbuf" "$MULTI_DIR/uniq" 16
+check_writes "multicall -oL"    1 -oL    "$MULTI_DIR/stdbuf" "$MULTI_DIR/uniq" 1000
+check_writes "multicall -o0"    1 -o0    "$MULTI_DIR/stdbuf" "$MULTI_DIR/uniq" 2000
+rm -rf "$MULTI_DIR"
+
+[[ $FAILURES -eq 0 ]] || { echo; echo "FAIL $FAILURES check(s) failed"; exit 1; }
+echo; echo "  OK  all checks passed"

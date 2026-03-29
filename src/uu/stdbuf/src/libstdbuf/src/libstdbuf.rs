@@ -246,6 +246,8 @@ fn set_buffer(stream: *mut FILE, value: &str) {
 /// The caller must ensure this function is only called in a compatible runtime environment.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __stdbuf() {
+    // println!("66666666666666666666666666");
+    // eprintln!("6666666666666666666666666666666");
     // panic!("INSIDE __STDBUF");
     use std::io::{BufferedRead, BufferedWrite};
     if let Ok(val) = env::var("_STDBUF_I") {
@@ -264,8 +266,8 @@ pub unsafe extern "C" fn __stdbuf() {
     }
     if let Ok(val) = env::var("_STDBUF_E") {
         io::stderr()
-            .lock()
-            .set_buffering_mode(value_to_buffering_mode(&val));
+            .lock();
+            // .set_buffering_mode(value_to_buffering_mode(&val));
         set_buffer(unsafe { __stdbuf_get_stderr() }, &val);
     }
 }

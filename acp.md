@@ -62,6 +62,8 @@ because it's just another call
 5. swtichwriter maybe bufferedwriter instead as the name
 6. compare to vector api, `set_capacity`
 
+seq 1000 | strace -e trace=write stdbuf -o4096 uniq 2>&1 | grep 'write(1' | wc -l
+
 output
 ```text
 $ seq 1000000 | strace -e trace=write uniq 2>&1 | grep 'write(1' | wc -l
