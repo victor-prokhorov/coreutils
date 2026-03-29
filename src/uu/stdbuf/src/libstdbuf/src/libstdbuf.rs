@@ -265,9 +265,7 @@ pub unsafe extern "C" fn __stdbuf() {
         set_buffer(unsafe { __stdbuf_get_stdout() }, &val);
     }
     if let Ok(val) = env::var("_STDBUF_E") {
-        io::stderr()
-            .lock();
-            // .set_buffering_mode(value_to_buffering_mode(&val));
+        // TODO: set_buffering_mode for stderr once StderrLock implements BufferedWrite
         set_buffer(unsafe { __stdbuf_get_stderr() }, &val);
     }
 }
